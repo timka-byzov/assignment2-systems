@@ -1,9 +1,7 @@
 import argparse
 
-
-from cs336_systems.benchmark.models import ModelConfig, BenchmarkType, BenchmarkConfig
+from cs336_systems.benchmark.models import BenchmarkConfig, BenchmarkType, ModelConfig
 from cs336_systems.benchmark.stat import prettify_results, process_results
-from cs336_systems.benchmark.runner import run_bench
 
 
 def main():
@@ -26,23 +24,32 @@ def main():
 
     args = parser.parse_args()
 
-    results = run_bench(
-        BenchmarkConfig(
-            model_config=ModelConfig(
-                vocab_size=10_000,
-                context_length=512,
-                d_model=args.d_model,
-                d_ff=args.d_ff,
-                num_layers=args.num_layers,
-                num_heads=args.num_heads,
-            ),
-            benchmark_type=BenchmarkType(args.type.lower()),
-            steps=args.steps,
-            warmup_steps=args.warmup_steps,
-        )
+    config = BenchmarkConfig(
+        model_config=ModelConfig(
+            vocab_size=10_000,
+            context_length=512,
+            d_model=args.d_model,
+            d_ff=args.d_ff,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+        ),
+        benchmark_type=BenchmarkType(args.type),
+        steps=args.steps,
+        warmup_steps=args.warmup_steps,
     )
-    if results:
-        print(prettify_results(process_results(results)))
+
+    if args.type == BenchmarkType.NSYS:
+        from cs336_systems.benchmark.runner.impl.nvtx import run_bench
+
+        run_bench(config)
+
+    else:
+        from cs336_systems.benchmark.runner.impl.timing import run_bench
+
+        results = run_bench(config)
+        if results:
+            print(prettify_results(process_results(results)))
+
     print("\n\nDONE")
 
 
