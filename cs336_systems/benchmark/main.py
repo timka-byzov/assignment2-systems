@@ -1,46 +1,14 @@
 from cs336_basics.model import BasicsTransformerLM
-from dataclasses import dataclass, asdict
+from dataclasses import asdict
 import argparse
-
 from cs336_basics.nn_utils import cross_entropy
 from cs336_basics.optimizer import AdamW
 import torch
 from cs336_systems.benchmark.data import generate_random_batch
-from enum import StrEnum, auto
 import timeit
-
-
-class BenchmarkType(StrEnum):
-    FORWARD = auto()
-    FORWARD_BACKWARD = auto()
-    FORWARD_BACKWARD_OPTIMIZER = auto()
-
-
-@dataclass
-class ModelConfig:
-    vocab_size: int
-    context_length: int
-    d_model: int
-    num_layers: int
-    num_heads: int
-    d_ff: int
-    rope_theta: float | None = 10_000.0
-
-
-@dataclass
-class BenchmarkConfig:
-    model_config: ModelConfig
-    benchmark_type: BenchmarkType
-    batch_size: int = 10
-    warmup_steps: int = 5
-    steps: int = 10
-
-
-@dataclass
-class BenchmarkResult:
-    forward: float = 0.0
-    backward: float = 0.0
-    optimizer: float = 0.0
+from cs336_systems.benchmark.models import ModelConfig, BenchmarkType, BenchmarkResult, BenchmarkConfig
+from cs336_systems.benchmark.stat import prettify_results, process_results
+from tqdm import tqdm
 
 
 def init_model(config: ModelConfig) -> BasicsTransformerLM:
@@ -85,20 +53,7 @@ def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, bencmark_typ
     return result
 
 
-def _process_results(results: list[BenchmarkResult], steps: int) -> BenchmarkResult:
-    result = BenchmarkResult()
-    for x in results:
-        result.forward += x.forward
-        result.backward += x.backward
-        result.optimizer += x.optimizer
-    result.forward /= steps
-    result.backward /= steps
-    result.optimizer /= steps
-
-    return result
-
-
-def run_bench(config: BenchmarkConfig):
+def run_bench(config: BenchmarkConfig) -> list[BenchmarkResult]:
     assert torch.cuda.is_available()
     model = init_model(config.model_config).cuda()
     optimizer = AdamW(model.parameters())
@@ -110,15 +65,14 @@ def run_bench(config: BenchmarkConfig):
         max_seq_len=config.model_config.context_length,
     ).cuda()
 
-    for step in range(config.warmup_steps + config.steps):
+    for step in tqdm(range(config.warmup_steps + config.steps)):
         result = run_bench_once(model, batch, config.benchmark_type, optimizer)
 
         if step < config.warmup_steps:
             continue
 
         results.append(result)
-
-    return _process_results(results, config.steps)
+    return results
 
 
 def main():
@@ -142,21 +96,21 @@ def main():
 
     args = parser.parse_args()
 
-    print(
-        run_bench(
-            BenchmarkConfig(
-                model_config=ModelConfig(
-                    vocab_size=10_000,
-                    context_length=512,
-                    d_model=int(args.d_model),
-                    d_ff=int(args.d_ff),
-                    num_layers=int(args.num_layers),
-                    num_heads=int(args.num_heads),
-                ),
-                benchmark_type=BenchmarkType(args.type.lower()),
-            )
+    results = run_bench(
+        BenchmarkConfig(
+            model_config=ModelConfig(
+                vocab_size=10_000,
+                context_length=512,
+                d_model=int(args.d_model),
+                d_ff=int(args.d_ff),
+                num_layers=int(args.num_layers),
+                num_heads=int(args.num_heads),
+            ),
+            benchmark_type=BenchmarkType(args.type.lower()),
         )
     )
+
+    print(prettify_results(process_results(results)))
 
 
 if __name__ == "__main__":
