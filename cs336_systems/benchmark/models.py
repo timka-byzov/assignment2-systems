@@ -25,7 +25,7 @@ class BenchmarkConfig:
     benchmark_type: BenchmarkType
     batch_size: int = 10
     warmup_steps: int = 5
-    steps: int = 1000
+    steps: int = 100
 
 
 @dataclass
