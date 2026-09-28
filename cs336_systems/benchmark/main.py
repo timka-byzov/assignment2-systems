@@ -21,10 +21,6 @@ def main():
     parser.add_argument("-f", "--forward", action="store_true", help="forward only")
 
     # parser.add_argument(
-    #     "-c", "--count", type=int, default=1, help="Number of repetitions."
-    # )
-
-    # parser.add_argument(
     #     "-v", "--verbose", action="store_true", help="Enable verbose logging."
     # )
 
@@ -45,8 +41,9 @@ def main():
             warmup_steps=args.warmup_steps,
         )
     )
-
-    print(prettify_results(process_results(results)))
+    if results:
+        print(prettify_results(process_results(results)))
+    print("\n\nDONE")
 
 
 if __name__ == "__main__":

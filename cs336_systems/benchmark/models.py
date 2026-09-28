@@ -6,6 +6,7 @@ class BenchmarkType(StrEnum):
     FORWARD = auto()
     FORWARD_BACKWARD = auto()
     FORWARD_BACKWARD_OPTIMIZER = auto()
+    NSYS = auto()
 
 
 @dataclass
@@ -23,9 +24,9 @@ class ModelConfig:
 class BenchmarkConfig:
     model_config: ModelConfig
     benchmark_type: BenchmarkType
+    warmup_steps: int
+    steps: int
     batch_size: int = 10
-    warmup_steps: int = 5
-    steps: int = 100
 
 
 @dataclass

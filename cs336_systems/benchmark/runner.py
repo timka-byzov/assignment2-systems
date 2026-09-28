@@ -27,7 +27,7 @@ class TimeManager:
         self.elapsed = timeit.default_timer() - self.star_time
 
 
-def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, bencmark_type: BenchmarkType, optimizer: torch.optim.Optimizer) -> BenchmarkResult:
+def run_bench_once_with_manager(model: BasicsTransformerLM, batch: torch.Tensor, bencmark_type: BenchmarkType, optimizer: torch.optim.Optimizer) -> BenchmarkResult:
     result = BenchmarkResult()
 
     with TimeManager() as t:
@@ -51,7 +51,19 @@ def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, bencmark_typ
     return result
 
 
-def run_bench(config: BenchmarkConfig) -> list[BenchmarkResult]:
+def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, bencmark_type: BenchmarkType, optimizer: torch.optim.Optimizer):
+    out = model.forward(batch)
+
+    loss = cross_entropy(out[:, :-1, ...], batch[:, 1:, ...])
+
+    optimizer.zero_grad()
+
+    loss.backward()
+
+    optimizer.step()
+
+
+def run_bench(config: BenchmarkConfig) -> list[BenchmarkResult] | None:
     assert torch.cuda.is_available()
     model = init_model(config.model_config).cuda()
     optimizer = AdamW(model.parameters())
@@ -64,10 +76,12 @@ def run_bench(config: BenchmarkConfig) -> list[BenchmarkResult]:
     ).cuda()
 
     for step in tqdm(range(config.warmup_steps + config.steps)):
-        result = run_bench_once(model, batch, config.benchmark_type, optimizer)
+        params = (model, batch, config.benchmark_type, optimizer)
+        if config.benchmark_type == BenchmarkType.NSYS:
+            run_bench_once(*params)
+        else:
+            res = run_bench_once_with_manager(*params)
+            if step < config.warmup_steps:
+                results.append(res)
 
-        if step < config.warmup_steps:
-            continue
-
-        results.append(result)
     return results
