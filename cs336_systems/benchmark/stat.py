@@ -1,4 +1,5 @@
 import torch
+
 from cs336_systems.benchmark.models import BenchmarkResult, BenchmarkStatistic
 
 
