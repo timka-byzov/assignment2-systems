@@ -1,7 +1,10 @@
+import argparse
 import timeit
 from dataclasses import dataclass
+from enum import StrEnum, auto
 from itertools import product
 
+import numpy as np
 import torch
 from jaxtyping import Float
 from tqdm import tqdm
@@ -14,6 +17,7 @@ SEQ_LENS = [256, 1024, 4096, 8192, 16384]
 FORWARD_PASSES = 100
 BACKWARD_PASSES = 100
 WARMUP_STEPS = 5
+DEVICE = "cuda:0"
 
 
 @dataclass
@@ -21,7 +25,7 @@ class AttnParams:
     Q: Float[torch.Tensor, " ... queries d_h"]
     K: Float[torch.Tensor, " ... keys d_h"]
     V: Float[torch.Tensor, " ... keys d_h"]
-    is_causal: bool = True
+    is_causal: bool
 
 
 @dataclass
@@ -44,10 +48,6 @@ class TimeManager:
     def __exit__(self, exc_type, exc_value, traceback):
         torch.cuda.synchronize()
         self.elapsed = timeit.default_timer() - self.star_time
-
-
-def mean(data: list[int]):
-    return sum(data) / len(data)
 
 
 def make_projection(input_spec: AttnInputSpec, requires_grad: bool = False) -> Float[torch.Tensor, " ... queries d_h"]:
@@ -79,12 +79,15 @@ def clear_grads(params: AttnParams):
 
 
 def warmup(steps: int, module, params: AttnParams, dO: Float[torch.Tensor, " ... queries d_h"] | None = None):
+    out = None
     for step in range(steps):
-        out: torch.Tensor = module.forward(params.Q, params.K, params.V, params.is_causal)
+        if out is not None:
+            del out  # release buffer to prevent OOM
+        out = module(params.Q, params.K, params.V, params.is_causal)
         if dO is not None:
             out.backward(dO)
             clear_grads(params)
-    return out
+    del out
 
 
 @dataclass
@@ -95,8 +98,8 @@ class BenchmarkResult:
     backward_time: float
 
 
-def run_bench_once(spec: AttnInputSpec, module: torch.nn.Module) -> BenchmarkResult:
-    params = get_attn_params(spec, is_causal=False)
+def run_bench_once(spec: AttnInputSpec, is_causal: bool, module: torch.nn.Module) -> BenchmarkResult:
+    params = get_attn_params(spec, is_causal=is_causal)
 
     warmup(WARMUP_STEPS, module, params)
     fwd_timings = []
@@ -106,7 +109,7 @@ def run_bench_once(spec: AttnInputSpec, module: torch.nn.Module) -> BenchmarkRes
         if out is not None:
             del out  # release buffer and graph data to prevent OOM
         with TimeManager() as t:
-            out = module.forward(params.Q, params.K, params.V, params.is_causal)
+            out = module(params.Q, params.K, params.V, params.is_causal)
         fwd_timings.append(t.elapsed)
     fwd_allocated = torch.cuda.memory_allocated() - pre_fwd_allocated  # out graph is alive at the moment of measure
     del out  # release graph data
@@ -118,7 +121,7 @@ def run_bench_once(spec: AttnInputSpec, module: torch.nn.Module) -> BenchmarkRes
     for step in range(BACKWARD_PASSES):
         if out is not None:
             del out  # release buffer to prevent OOM
-        out = module.forward(params.Q, params.K, params.V, params.is_causal)
+        out = module(params.Q, params.K, params.V, params.is_causal)
         with TimeManager() as t:
             out.backward(dO)  # releases graph data auto
         bwd_timings.append(t.elapsed)
@@ -128,8 +131,8 @@ def run_bench_once(spec: AttnInputSpec, module: torch.nn.Module) -> BenchmarkRes
     return BenchmarkResult(
         spec=spec,
         forward_mem=fwd_allocated,
-        forward_time=mean(fwd_timings),
-        backward_time=mean(bwd_timings),
+        forward_time=np.median(fwd_timings),
+        backward_time=np.median(bwd_timings),
     )
 
 
@@ -142,7 +145,7 @@ def print_table(results: dict[tuple, BenchmarkResult]):
         print(f"{d_h:5d} {seq_len:8d} {result.forward_time * 1000:11.3f} {result.backward_time * 1000:12.3f} {result.forward_mem / 2**20:10.1f}")
 
 
-def run_bench(module: torch.nn.Module, device: str):
+def run_bench(module: torch.nn.Module, device: str, is_causal=True):
     result_dict = {}
 
     for d_h, seq_len in tqdm(
@@ -152,7 +155,7 @@ def run_bench(module: torch.nn.Module, device: str):
     ):
         spec = AttnInputSpec(bs=BATCH_SIZE, seq_len=seq_len, d_h=d_h, device=device)
         try:
-            res = run_bench_once(spec, module)
+            res = run_bench_once(spec, is_causal, module)
             result_dict[(d_h, seq_len)] = res
         except torch.cuda.OutOfMemoryError:
             print(f"OOM on {d_h} {seq_len}")
@@ -160,11 +163,34 @@ def run_bench(module: torch.nn.Module, device: str):
     print_table(result_dict)
 
 
+class AttnImpl(StrEnum):
+    torch = auto()
+    torch_compile = auto()
+    flash2 = auto()
+
+
 def main():
+
     assert torch.cuda.is_available()
-    device = "cuda:0"
 
-    run_bench(SDPA(), device=device)
+    parser = argparse.ArgumentParser(prog="benchmark attn", epilog="Thank you for using MyCLI!")
+    parser.add_argument("attn_impl")
+
+    args = parser.parse_args()
+
+    impl = None
+    if args.attn_impl == AttnImpl.torch:
+        impl = SDPA()
+
+    elif args.attn_impl == AttnImpl.torch_compile:
+        impl = SDPA()
+        impl.compile()
+
+    else:
+        raise NotImplementedError("flash2 in progress")
+
+    run_bench(impl, DEVICE)
 
 
-main()
+if __name__ == "__main__":
+    main()
