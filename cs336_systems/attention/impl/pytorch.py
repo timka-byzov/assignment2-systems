@@ -35,7 +35,7 @@ class SDPA(torch.nn.Module):
 
 
 @torch.no_grad
-def flash_attn_fwd(
+def _flash_attn_fwd(
     Q: Float[torch.Tensor, "b queries d_q"],
     K: Float[torch.Tensor, "b keys d_q"],
     V: Float[torch.Tensor, "b keys d_v"],
@@ -87,7 +87,7 @@ def flash_attn_fwd(
 
 
 @torch.no_grad
-def flash_attn_bwd(
+def _flash_attn_bwd(
     Q: Float[torch.Tensor, "b queries d_q"],
     dQ_out: Float[torch.Tensor, "b queries d_q"],
     K: Float[torch.Tensor, "b keys d_q"],
@@ -190,7 +190,7 @@ class FlashAttention(torch.autograd.Function):
         O_out = torch.zeros((B, N_QUERIES, D), device=Q.device)
         L_out = torch.zeros((B, N_QUERIES), device=Q.device)
 
-        flash_attn_fwd(Q, K, V, O_out, L_out, N_QUERIES, N_KEYS, Q_TILE_SIZE, K_TILE_SIZE, SCALE)
+        _flash_attn_fwd(Q, K, V, O_out, L_out, N_QUERIES, N_KEYS, Q_TILE_SIZE, K_TILE_SIZE, SCALE)
 
         ctx.save_for_backward(Q, K, V, O_out, L_out)
 
@@ -214,7 +214,7 @@ class FlashAttention(torch.autograd.Function):
         dQ_out = torch.zeros((B, N_QUERIES, D), device=device)
         dK_out = torch.zeros((B, N_KEYS, D), device=device)
         dV_out = torch.zeros((B, N_KEYS, D), device=device)
-        flash_attn_bwd(Q, dQ_out, K, dK_out, V, dV_out, O, grad_out, L, N_QUERIES, N_KEYS, Q_TILE_SIZE, K_TILE_SIZE, SCALE)
+        _flash_attn_bwd(Q, dQ_out, K, dK_out, V, dV_out, O, grad_out, L, N_QUERIES, N_KEYS, Q_TILE_SIZE, K_TILE_SIZE, SCALE)
 
         return dQ_out, dK_out, dV_out, None
 
