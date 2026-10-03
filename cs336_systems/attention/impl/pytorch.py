@@ -34,12 +34,13 @@ class SDPA(torch.nn.Module):
         return O
 
 
+@torch.no_grad
 def flash_attn_fwd(
     Q: Float[torch.Tensor, "b queries d_q"],
     K: Float[torch.Tensor, "b keys d_q"],
     V: Float[torch.Tensor, "b keys d_v"],
-    O: Float[torch.Tensor, "b queries d_v"],
-    L: Float[torch.Tensor, "b queries"],
+    O_out: Float[torch.Tensor, "b queries d_v"],
+    L_out: Float[torch.Tensor, "b queries"],
     N_QUERIES: int,
     N_KEYS: int,
     Q_TILE_SIZE: int,
@@ -51,18 +52,18 @@ def flash_attn_fwd(
 
     B = Q.size(0)
 
-    for i in range(Q_TILES):
-        Q_tile = Q[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # [B_q, d]
-        O_tile = O[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # [B_q, d]
+    for i in range(Q_TILES):  # Q outer loop
+        Q_tile = Q[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # HBM -> SRAM
+        O_tile = O_out[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # HBM -> SRAM
 
         prev_m = torch.zeros((B, Q_TILE_SIZE), device=Q.device)
         l = torch.zeros((B, Q_TILE_SIZE), device=Q.device)
 
-        for j in range(K_TILES):
+        for j in range(K_TILES):  # K V inner loop
             # compute P
-            K_tile = K[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]  # [B_k, d]
+            K_tile = K[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]  # HBM -> SRAM
 
-            S_tile = Q_tile @ K_tile.transpose(-1, -2) / scale  # [B_q, B_k]
+            S_tile = Q_tile @ K_tile.transpose(-1, -2) / scale  # SMEM
 
             tile_m = S_tile.max(dim=-1).values
             m = torch.maximum(prev_m, tile_m)
@@ -81,8 +82,90 @@ def flash_attn_fwd(
         O_tile = (1 / l.unsqueeze(-1)) * O_tile
 
         # write results
-        O[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :] = O_tile
-        L[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)] = prev_m + torch.log(l)
+        O_out[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :] = O_tile  # SMEM -> HBM
+        L_out[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)] = prev_m + torch.log(l)  # SMEM -> HBM
+
+
+@torch.no_grad
+def flash_attn_bwd(
+    Q: Float[torch.Tensor, "b queries d_q"],
+    dQ_out: Float[torch.Tensor, "b queries d_q"],
+    K: Float[torch.Tensor, "b keys d_q"],
+    dK_out: Float[torch.Tensor, "b keys d_q"],
+    V: Float[torch.Tensor, "b keys d_v"],
+    dV_out: Float[torch.Tensor, "b keys d_v"],
+    O: Float[torch.Tensor, "b queries d_v"],
+    dO: Float[torch.Tensor, "b queries d_v"],
+    L: Float[torch.Tensor, "b queries"],
+    N_QUERIES: int,
+    N_KEYS: int,
+    Q_TILE_SIZE: int,
+    K_TILE_SIZE: int,
+    scale: float,
+):
+    Q_TILES = (N_QUERIES + Q_TILE_SIZE - 1) // Q_TILE_SIZE
+    K_TILES = (N_KEYS + K_TILE_SIZE - 1) // K_TILE_SIZE
+
+    D = (O * dO).sum(dim=-1)
+
+    for j in range(K_TILES):  # K V outer loop
+        K_tile = K[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]  # HBM -> SRAM
+        V_tile = V[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]  # HBM -> SRAM
+
+        dK_out_tile = dK_out[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]
+        dV_out_tile = dV_out[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]
+
+        for i in range(Q_TILES):
+            Q_tile = Q[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # HBM -> SRAM
+            dO_tile = dO[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # HBM -> SRAM
+            L_tile = L[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)]  # HBM -> SRAM
+            D_tile = D[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)]  # HBM -> SRAM
+
+            # check
+            S_tile = Q_tile @ K_tile.transpose(-2, -1) / scale
+            P_tile = torch.exp(S_tile - L_tile.unsqueeze(-1))
+
+            # 1
+            dV_out_tile = dV_out_tile + P_tile.transpose(-2, -1) @ dO_tile  # TARGET
+
+            # 2
+            dP_tile = dO_tile @ V_tile.transpose(-2, -1)
+
+            # 3
+            dS_tile = P_tile * (dP_tile - D_tile.unsqueeze(-1))
+
+            # 5
+            dK_out_tile = dK_out_tile + dS_tile.transpose(-2, -1) @ Q_tile / scale  # TARGET
+
+        dV_out[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :] = dV_out_tile
+        dK_out[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :] = dK_out_tile
+
+    # для torch реализации это не нужно
+    for i in range(Q_TILES):
+        Q_tile = Q[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # HBM -> SRAM
+        dO_tile = dO[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]  # HBM -> SRAM
+        dQ_out_tile = dQ_out[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :]
+        L_tile = L[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)]  # HBM -> SRAM
+        D_tile = D[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)]  # HBM -> SRAM
+
+        for j in range(K_TILES):
+            K_tile = K[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]  # HBM -> SRAM
+            V_tile = V[:, K_TILE_SIZE * j : K_TILE_SIZE * (j + 1), :]  # HBM -> SRAM
+
+            # check
+            S_tile = Q_tile @ K_tile.transpose(-2, -1) / scale
+            P_tile = torch.exp(S_tile - L_tile.unsqueeze(-1))
+
+            # 2
+            dP_tile = dO_tile @ V_tile.transpose(-2, -1)
+
+            # 3
+            dS_tile = P_tile * (dP_tile - D_tile.unsqueeze(-1))
+
+            # 4
+            dQ_out_tile = dQ_out_tile + dS_tile @ K_tile / scale  # TARGET
+
+        dQ_out[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1), :] = dQ_out_tile
 
 
 class FlashAttention(torch.autograd.Function):
@@ -104,18 +187,36 @@ class FlashAttention(torch.autograd.Function):
         N_QUERIES = Q.size(-2)
         N_KEYS = K.size(-2)
 
-        O = torch.zeros((B, N_QUERIES, D), device=Q.device)
-        L = torch.zeros((B, N_QUERIES), device=Q.device)
+        O_out = torch.zeros((B, N_QUERIES, D), device=Q.device)
+        L_out = torch.zeros((B, N_QUERIES), device=Q.device)
 
-        flash_attn_fwd(Q, K, V, O, L, N_QUERIES, N_KEYS, Q_TILE_SIZE, K_TILE_SIZE, SCALE)
+        flash_attn_fwd(Q, K, V, O_out, L_out, N_QUERIES, N_KEYS, Q_TILE_SIZE, K_TILE_SIZE, SCALE)
 
-        ctx.save_for_backward(Q, K, V, O, L)
+        ctx.save_for_backward(Q, K, V, O_out, L_out)
 
-        return O
+        return O_out
 
     @staticmethod
     def backward(ctx, grad_out):
-        raise NotImplementedError()
+        Q, K, V, O, L = ctx.saved_tensors
+        device = Q.device
+        B = Q.size(0)
+
+        N_QUERIES = Q.size(-2)
+        N_KEYS = K.size(-2)
+
+        D = Q.size(-1)
+        SCALE = D**0.5
+
+        K_TILE_SIZE = 16
+        Q_TILE_SIZE = 16
+
+        dQ_out = torch.zeros((B, N_QUERIES, D), device=device)
+        dK_out = torch.zeros((B, N_KEYS, D), device=device)
+        dV_out = torch.zeros((B, N_KEYS, D), device=device)
+        flash_attn_bwd(Q, dQ_out, K, dK_out, V, dV_out, O, grad_out, L, N_QUERIES, N_KEYS, Q_TILE_SIZE, K_TILE_SIZE, SCALE)
+
+        return dQ_out, dK_out, dV_out, None
 
 
 f_flashattn = FlashAttention.apply
