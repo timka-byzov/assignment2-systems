@@ -121,7 +121,7 @@ def _flash_attn_bwd(
             L_tile = L[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)]  # HBM -> SRAM
             D_tile = D[:, Q_TILE_SIZE * i : Q_TILE_SIZE * (i + 1)]  # HBM -> SRAM
 
-            # check
+            # CHECK
             S_tile = Q_tile @ K_tile.transpose(-2, -1) / scale
             P_tile = torch.exp(S_tile - L_tile.unsqueeze(-1))
 
