@@ -8,7 +8,6 @@ from tqdm import tqdm
 
 from cs336_systems.benchmark.models import BenchmarkConfig, BenchmarkResult, BenchmarkType
 from cs336_systems.benchmark.runner.common import warmup
-from cs336_systems.benchmark.runner.setup import setup_benchmark
 
 
 class TimeManager:
@@ -20,12 +19,12 @@ class TimeManager:
         self.star_time = timeit.default_timer()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, *args):
         torch.cuda.synchronize()
         self.elapsed = timeit.default_timer() - self.star_time
 
 
-def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, optimizer: torch.optim.Optimizer, benchmark_type: BenchmarkType) -> BenchmarkResult:
+def run_bench_once(model: torch.nn.Module, optimizer: torch.optim.Optimizer, batch: torch.Tensor, benchmark_type: BenchmarkType) -> BenchmarkResult:
     result = BenchmarkResult()
 
     with TimeManager() as t:
@@ -49,10 +48,9 @@ def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, optimizer: t
     return result
 
 
-def run_bench(config: BenchmarkConfig) -> list[BenchmarkResult] | None:
-    model, optimizer, batch = setup_benchmark(config)
+def run_bench(config: BenchmarkConfig, model, optimizer, batch) -> list[BenchmarkResult] | None:
     results = []
-    params = (model, batch, optimizer, config.benchmark_type)
+    params = (model, optimizer, batch, config.benchmark_type)
 
     warmup(config.warmup_steps, partial(run_bench_once, *params))
 

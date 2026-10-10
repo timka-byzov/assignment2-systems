@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from enum import auto, StrEnum
+from enum import StrEnum, auto
 
 
 class BenchmarkType(StrEnum):
@@ -10,7 +10,7 @@ class BenchmarkType(StrEnum):
 
 
 @dataclass
-class ModelConfig:
+class TransfomerConfig:
     vocab_size: int
     context_length: int
     d_model: int
@@ -18,6 +18,12 @@ class ModelConfig:
     num_heads: int
     d_ff: int
     rope_theta: float | None = 10_000.0
+
+
+@dataclass
+class ModelConfig:
+    tranfsormer_config: TransfomerConfig
+    dp: int = 1
 
 
 @dataclass

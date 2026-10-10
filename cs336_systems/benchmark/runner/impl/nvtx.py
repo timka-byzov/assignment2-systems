@@ -1,17 +1,15 @@
 from functools import partial
 
 import torch
-import torch.cuda.nvtx as nvtx
-from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.nn_utils import cross_entropy
+from torch.cuda import nvtx
 from tqdm import tqdm
 
 from cs336_systems.benchmark.models import BenchmarkConfig
 from cs336_systems.benchmark.runner.common import warmup
-from cs336_systems.benchmark.runner.setup import setup_benchmark
 
 
-def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, optimizer: torch.optim.Optimizer):
+def run_bench_once(model: torch.nn.Module, optimizer: torch.optim.Optimizer, batch: torch.Tensor):
     with nvtx.range("forward"):
         out = model.forward(batch)
 
@@ -26,10 +24,9 @@ def run_bench_once(model: BasicsTransformerLM, batch: torch.Tensor, optimizer: t
         optimizer.step()
 
 
-def run_bench(config: BenchmarkConfig) -> None:
-    model, optimizer, batch = setup_benchmark(config)
+def run_bench(config: BenchmarkConfig, model, optimizer, batch) -> None:
 
-    params = (model, batch, optimizer)
+    params = (model, optimizer, batch)
 
     warmup(config.warmup_steps, partial(run_bench_once, *params))
 
