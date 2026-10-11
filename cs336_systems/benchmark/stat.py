@@ -1,11 +1,11 @@
 import torch
 
-from cs336_systems.benchmark.models import BenchmarkResult, BenchmarkStatistic
+from cs336_systems.benchmark.dto import BenchmarkResult, BenchmarkStatistic
 
 
 def _get_mean_and_std(data: list[float]) -> tuple[float, float]:
     t = torch.tensor(data)
-    return float(t.mean()), float(t.std())
+    return float(t.mean()), float(t.std(correction=1 if len(data) > 1 else 0))
 
 
 def process_results(results: list[BenchmarkResult]) -> BenchmarkStatistic:

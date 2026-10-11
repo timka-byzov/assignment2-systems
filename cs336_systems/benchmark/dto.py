@@ -6,33 +6,24 @@ class BenchmarkType(StrEnum):
     FORWARD = auto()
     FORWARD_BACKWARD = auto()
     FORWARD_BACKWARD_OPTIMIZER = auto()
-    NSYS = auto()
 
 
-@dataclass
-class TransfomerConfig:
-    vocab_size: int
-    context_length: int
-    d_model: int
-    num_layers: int
-    num_heads: int
-    d_ff: int
-    rope_theta: float | None = 10_000.0
-
-
-@dataclass
-class ModelConfig:
-    tranfsormer_config: TransfomerConfig
-    dp: int = 1
+class ProfilerType(StrEnum):
+    TIMING = auto()
+    NVTX = auto()
 
 
 @dataclass
 class BenchmarkConfig:
-    model_config: ModelConfig
     benchmark_type: BenchmarkType
     warmup_steps: int
     steps: int
+    profiler_type: ProfilerType
+    workload: str
     batch_size: int = 10
+    context_length: int = 512
+    dp: int | None = None
+    device: str = "cuda"
 
 
 @dataclass

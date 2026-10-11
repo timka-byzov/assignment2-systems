@@ -1,60 +1,47 @@
 import timeit
-from functools import partial
 
 import torch
-from cs336_basics.model import BasicsTransformerLM
-from cs336_basics.nn_utils import cross_entropy
-from tqdm import tqdm
 
-from cs336_systems.benchmark.models import BenchmarkConfig, BenchmarkResult, BenchmarkType
-from cs336_systems.benchmark.runner.common import warmup
+from cs336_systems.benchmark.dto import BenchmarkResult, BenchmarkType
+from cs336_systems.benchmark.runner.step import ProfilerStep
+from cs336_systems.benchmark.workload import Workload
 
 
 class TimeManager:
-    def __init__(self) -> None:
+    def __init__(self, device: str | torch.device = "cuda") -> None:
+        self.device = torch.device(device)
         self.elapsed: float = 0.0
 
     def __enter__(self):
-        torch.cuda.synchronize()
-        self.star_time = timeit.default_timer()
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        self.start_time = timeit.default_timer()
         return self
 
     def __exit__(self, *args):
-        torch.cuda.synchronize()
-        self.elapsed = timeit.default_timer() - self.star_time
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        self.elapsed = timeit.default_timer() - self.start_time
 
 
-def run_bench_once(model: torch.nn.Module, optimizer: torch.optim.Optimizer, batch: torch.Tensor, benchmark_type: BenchmarkType) -> BenchmarkResult:
-    result = BenchmarkResult()
+class TimingStep(ProfilerStep):
+    def __init__(self, device: str | torch.device = "cuda") -> None:
+        self.device = device
 
-    with TimeManager() as t:
-        out = model.forward(batch)
-    result.forward = t.elapsed
+    def __call__(self, workload: Workload, benchmark_type: BenchmarkType) -> BenchmarkResult:
+        result = BenchmarkResult()
+        with TimeManager(self.device) as t:
+            workload.forward()
+        result.forward = t.elapsed
 
-    if benchmark_type != BenchmarkType.FORWARD:
-        loss = cross_entropy(out[:, :-1, ...], batch[:, 1:, ...])
-        if optimizer:
-            optimizer.zero_grad()
+        if benchmark_type != BenchmarkType.FORWARD:
+            with TimeManager(self.device) as t:
+                workload.backward()
+            result.backward = t.elapsed
 
-        with TimeManager() as t:
-            loss.backward()
-        result.backward = t.elapsed
+            if benchmark_type == BenchmarkType.FORWARD_BACKWARD_OPTIMIZER:
+                with TimeManager(self.device) as t:
+                    workload.optimizer_step()
+                result.optimizer = t.elapsed
 
-        if benchmark_type == BenchmarkType.FORWARD_BACKWARD_OPTIMIZER:
-            with TimeManager() as t:
-                optimizer.step()
-            result.optimizer = t.elapsed
-
-    return result
-
-
-def run_bench(config: BenchmarkConfig, model, optimizer, batch) -> list[BenchmarkResult] | None:
-    results = []
-    params = (model, optimizer, batch, config.benchmark_type)
-
-    warmup(config.warmup_steps, partial(run_bench_once, *params))
-
-    for step in tqdm(range(config.steps)):
-        results.append(run_bench_once(*params))
-
-    return results
+        return result
