@@ -1,12 +1,10 @@
-from contextlib import nullcontext
-
 import torch
-from torch.cuda import nvtx
 from tqdm import tqdm
 
 from cs336_systems.benchmark.context import Context
 from cs336_systems.benchmark.dto import BenchmarkConfig, BenchmarkResult, ProfilerType
 from cs336_systems.benchmark.runner.impl.nvtx import NvtxStep
+from cs336_systems.benchmark.runner.impl.perfetto import PerfettoComputeStep, PerfettoMemoryStep
 from cs336_systems.benchmark.runner.impl.timing import TimingStep
 from cs336_systems.benchmark.workload import Workload
 
@@ -16,7 +14,15 @@ class Benchmark:
         self.config = config
         self.workload = workload
         self.ctx = ctx
-        self.step = TimingStep(ctx.device) if config.profiler_type == ProfilerType.TIMING else NvtxStep()
+        if config.profiler_type == ProfilerType.TIMING:
+            self.step = TimingStep(ctx.device)
+        elif config.profiler_type == ProfilerType.NVTX:
+            self.step = NvtxStep()
+        elif config.profiler_type == ProfilerType.PERFETTO_COMPUTE:
+            self.step = PerfettoComputeStep(config, ctx)
+        else:
+            assert config.profiler_type == ProfilerType.PERFETTO_MEMORY, "Unsupported profiler"
+            self.step = PerfettoMemoryStep(config, ctx)
 
     def run_once(self):
         return self.step(self.workload, self.config.benchmark_type)
@@ -31,8 +37,7 @@ class Benchmark:
         if torch.device(self.ctx.device).type == "cuda":
             torch.cuda.synchronize(self.ctx.device)
 
-        capture = nvtx.range("measure") if self.config.profiler_type == ProfilerType.NVTX else nullcontext()
-        with capture:
+        with self.step.capture():
             for _ in tqdm(range(self.config.steps), desc="BENCHMARK", disable=self.ctx.rank != 0):
                 result = self.run_once()
                 if result is not None:

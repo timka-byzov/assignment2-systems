@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from cs336_systems.benchmark.context import Context
+from cs336_systems.benchmark.dto import DDPType
 from cs336_systems.benchmark.workloads.dp import DataParallelWorkload
 from cs336_systems.benchmark.workloads.transformer import ModelConfig, TransfomerConfig, TransformerWorkload
 
@@ -13,9 +14,9 @@ TEN_B = ModelConfig(TransfomerConfig(vocab_size=10_000, context_length=512, d_mo
 _TRANSFORMERS = {"small": SMALL, "medium": MEDIUM, "large": LARGE, "xl": XL, "10b": TEN_B}
 
 
-def get_workload(name: str, ctx: Context, batch_size: int = 10, context_length: int = 512) -> TransformerWorkload:
+def get_workload(name: str, ctx: Context, batch_size: int = 10, context_length: int = 512, ddp_type: DDPType = DDPType.NAIVE) -> TransformerWorkload:
     config = _TRANSFORMERS[name]
     config = replace(config, batch_size=batch_size, tranfsormer_config=replace(config.tranfsormer_config, context_length=context_length))
     if ctx.mesh is not None and ctx.mesh.get_group("dp").size() > 1:
-        return DataParallelWorkload(config, ctx)
+        return DataParallelWorkload(config, ctx, ddp_type=ddp_type)
     return TransformerWorkload(config, ctx)

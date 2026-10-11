@@ -11,6 +11,13 @@ class BenchmarkType(StrEnum):
 class ProfilerType(StrEnum):
     TIMING = auto()
     NVTX = auto()
+    PERFETTO_COMPUTE = auto()
+    PERFETTO_MEMORY = auto()
+
+
+class DDPType(StrEnum):
+    NAIVE = auto()
+    BUCKET = auto()
 
 
 @dataclass
@@ -24,6 +31,8 @@ class BenchmarkConfig:
     context_length: int = 512
     dp: int | None = None
     device: str = "cuda"
+    trace_dir: str | None = None
+    ddp_type: DDPType = DDPType.NAIVE
 
 
 @dataclass

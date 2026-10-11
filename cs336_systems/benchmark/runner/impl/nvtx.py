@@ -6,6 +6,9 @@ from cs336_systems.benchmark.workload import Workload
 
 
 class NvtxStep(ProfilerStep):
+    def capture(self):
+        return nvtx.range("measure")
+
     def __call__(self, workload: Workload, benchmark_type: BenchmarkType) -> None:
         with nvtx.range("forward"):
             workload.forward()

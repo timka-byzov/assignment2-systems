@@ -44,7 +44,7 @@ class Runtime:
         owns_process_group = not dist.is_initialized()
         try:
             ctx = Runtime.setup(config)
-            workload = get_workload(config.workload, ctx, config.batch_size, config.context_length)
+            workload = get_workload(config.workload, ctx, config.batch_size, config.context_length, ddp_type=config.ddp_type)
             results = Benchmark(config, workload, ctx).run()
             if ctx.rank == 0:
                 if results is not None:
