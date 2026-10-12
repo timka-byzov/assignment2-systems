@@ -17,7 +17,9 @@ class ProfilerType(StrEnum):
 
 class DDPType(StrEnum):
     NAIVE = auto()
+    NAIVE_LATE = auto()
     BUCKET = auto()
+    PRO = auto()
 
 
 @dataclass
