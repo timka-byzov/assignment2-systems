@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.distributed as dist
 
 
 def get_flashattention_autograd_function_pytorch() -> type:
@@ -53,8 +54,10 @@ def get_ddp(module: torch.nn.Module) -> torch.nn.Module:
     Returns:
         Instance of a DDP class.
     """
-    # For example: return DDP(module)
-    raise NotImplementedError
+    from cs336_systems.distributed.ddp import DataParallelPro
+
+    device = next(module.parameters()).device
+    return DataParallelPro(module, pg=dist.group.WORLD, device=device)  # type: ignore
 
 
 def ddp_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Optimizer):
@@ -68,8 +71,7 @@ def ddp_on_after_backward(ddp_model: torch.nn.Module, optimizer: torch.optim.Opt
         optimizer: torch.optim.Optimizer
             Optimizer being used with the DDP-wrapped model.
     """
-    # For example: ddp_model.finish_gradient_synchronization()
-    raise NotImplementedError
+    ddp_model.finish_gradient_synchronization()  # type: ignore
 
 
 def get_fsdp(module: torch.nn.Module, compute_dtype: torch.dtype | None = None) -> torch.nn.Module:

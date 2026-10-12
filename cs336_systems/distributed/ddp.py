@@ -21,6 +21,10 @@ class _DataParallelBase(torch.nn.Module):
     def forward(self, *inputs, **kwargs):
         return self.model(*inputs, **kwargs)
 
+    @property
+    def module(self) -> torch.nn.Module:
+        return self.model
+
     def backward(self, loss: torch.Tensor, **kwargs):
         loss.backward(**kwargs)
         if self.require_backward_grad_sync:
